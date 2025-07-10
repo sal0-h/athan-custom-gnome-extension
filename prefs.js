@@ -39,6 +39,10 @@ class Settings {
         this._signals = [];
         this._httpSession = new Soup.Session();
 
+        this.#initializeSettingsUI();
+    }
+
+    #initializeSettingsUI() {
         log('Initializing settings UI...');
         this.#initFields();
         this.#createView();

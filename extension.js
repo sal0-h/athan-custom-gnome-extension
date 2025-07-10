@@ -37,25 +37,16 @@ const Azan = GObject.registerClass(
             this._panelPositionArr = ['center', 'left', 'right'];
             this._notifyBeforeAzanMinutes = [0, 5, 10, 15]; // ? Mapping to minutes
             this._conciseListLevels = [0, 1]; // ? 0: Primary prayers only, 1: All times
+
             this._bindSettings();
             this._loadSettings();
 
-            Main.panel.addToStatusArea(
-                'athan_custom@sal0-h',
-                this,
-                1,
-                this._panelPosition
-            );
+            this._initTimeData();
+            this._initUI();
+            this._initServices();
 
-            this.indicatorText = new St.Label({
-                text: _('...'),
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-            this.add_child(this.indicatorText);
-
-            this._gclueLocationChangedId = 0;
-            this._weatherAuthorized = false;
-
+            this._updateLabelPeriodic();
+            this._updatePrayerVisibility();
             this._dateFormatFull = _('%A %B %e, %Y');
 
             this._prayTimes = new PrayTimes.PrayTimes('MWL');
@@ -120,6 +111,64 @@ const Azan = GObject.registerClass(
                 (index - 12).toString()
             );
             this._timezoneArr.unshift('auto');
+        }
+
+        _initServices() {
+            this._gclueLocationChangedId = 0;
+            this._weatherAuthorized = false;
+
+            this._permStore = new PermissionStore.PermissionStore(
+                (proxy, error) => {
+                    if (error) {
+                        this.logger.log(
+                            'Failed to connect to permissionStore: ' +
+                                error.message
+                        );
+                        return;
+                    }
+
+                    this._permStore.LookupRemote(
+                        'gnome',
+                        'geolocation',
+                        (res, error) => {
+                            if (error)
+                                this.logger.log(
+                                    'Error looking up permission: ' +
+                                        error.message
+                                );
+
+                            let [perms, data] = error ? [{}, null] : res;
+                            let params = [
+                                'gnome',
+                                'geolocation',
+                                false,
+                                data,
+                                perms,
+                            ];
+                            this._onPermStoreChanged(
+                                this._permStore,
+                                '',
+                                params
+                            );
+                        }
+                    );
+                }
+            );
+        }
+
+        _initUI() {
+            Main.panel.addToStatusArea(
+                'athan_custom@sal0-h',
+                this,
+                1,
+                this._panelPosition
+            );
+
+            this.indicatorText = new St.Label({
+                text: _('...'),
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            this.add_child(this.indicatorText);
 
             this._prayItems = {};
 
@@ -191,47 +240,7 @@ const Azan = GObject.registerClass(
             this.prefs_s.actor.add_child(l);
 
             this.menu.addMenuItem(this.prefs_s);
-
-            this._updateLabelPeriodic();
-            this._updatePrayerVisibility();
-
-            this._permStore = new PermissionStore.PermissionStore(
-                (proxy, error) => {
-                    if (error) {
-                        this.logger.log(
-                            'Failed to connect to permissionStore: ' +
-                                error.message
-                        );
-                        return;
-                    }
-
-                    this._permStore.LookupRemote(
-                        'gnome',
-                        'geolocation',
-                        (res, error) => {
-                            if (error)
-                                this.logger.log(
-                                    'Error looking up permission: ' +
-                                        error.message
-                                );
-
-                            let [perms, data] = error ? [{}, null] : res;
-                            let params = [
-                                'gnome',
-                                'geolocation',
-                                false,
-                                data,
-                                perms,
-                            ];
-                            this._onPermStoreChanged(
-                                this._permStore,
-                                '',
-                                params
-                            );
-                        }
-                    );
-                }
-            );
+        }
         }
 
         _bindSettings() {
@@ -273,27 +282,28 @@ const Azan = GObject.registerClass(
         }
 
         _loadSettings() {
-            const settingsKeys = [
-                { key: 'auto-location', type: 'boolean' },
-                { key: 'calculation-method', type: 'int' },
-                { key: 'latitude', type: 'double' },
-                { key: 'longitude', type: 'double' },
-                { key: 'time-format-12', type: 'boolean' },
-                { key: 'timezone', type: 'int' },
-                { key: 'concise-list', type: 'int' },
-                { key: 'hijri-date-adjustment', type: 'int' },
-                { key: 'notify-for-azan', type: 'boolean' },
-                { key: 'notify-before-azan', type: 'int' },
-                { key: 'panel-position', type: 'int' },
-                { key: 'country', type: 'string' },
-                { key: 'city', type: 'string' },
-            ];
+            const settingsKeys = {
+                'auto-location': 'boolean',
+                'calculation-method': 'int',
+                latitude: 'double',
+                longitude: 'double',
+                'time-format-12': 'boolean',
+                timezone: 'int',
+                'concise-list': 'int',
+                'hijri-date-adjustment': 'int',
+                'notify-for-azan': 'boolean',
+                'notify-before-azan': 'int',
+                'panel-position': 'int',
+                country: 'string',
+                city: 'string',
+            };
 
-            settingsKeys.forEach(({ key, type }) => {
+            for (const key in settingsKeys) {
+                const type = settingsKeys[key];
                 const getMethod = `get_${type}`;
                 const optKey = `_opt_${key.replace(/-/g, '_')}`;
                 this[optKey] = this._settings[getMethod](key);
-            });
+            }
 
             this._opt_notify_before_azan =
                 this._notifyBeforeAzanMinutes[this._opt_notify_before_azan];
