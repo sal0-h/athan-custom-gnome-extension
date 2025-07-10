@@ -1,0 +1,17 @@
+.athan-panel {
+    font-family: Lotus, Arial, sans-serif;
+    font-size: 14px;
+    font-weight: bold;
+    direction: rtl;
+    color: -st-accent-bg-color;
+}
+
+.athan-label {
+    color: -st-accent-bg-color;
+}
+
+.prefs_s_action:hover {
+    color: #a3a3a3;
+    transition: color 500ms ease-in-out, background-color 500ms ease-in-out;
+    border: none;
+}

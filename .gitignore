@@ -1,0 +1,27 @@
+# Gnome Shell Extension specific
+*.o
+*.a
+*.so
+*.pyc
+*.pyo
+*.gmo
+*.mo
+*.po
+*.ts
+*.qm
+
+# Common temporary/IDE files
+.vscode/
+.idea/
+__pycache__/
+*.log
+*.swp
+*~
+*.bak
+
+# Node.js related (if you use npm/yarn for dev dependencies)
+node_modules/
+npm-debug.log
+yarn-error.log
+.pnp/
+.pnp.js

@@ -1,0 +1,10 @@
+{
+  "uuid": "athan_custom@sal0-h",
+  "name": "AthanTimes (Salman's Custom)",
+  "description": "Athan Prayer Times fork by sal0-h, with custom modifications.",
+  "shell-version": [
+    "48"
+  ],
+  "version": 22,
+  "settings-schema": "org.gnome.shell.extensions.athan_custom.sal0-h"
+}
