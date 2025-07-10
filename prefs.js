@@ -47,11 +47,7 @@ class Settings {
         this.#initFields();
         this.#createView();
         this.#populateCountries();
-        this.#bindSettings();
-
-        this.loadCitiesForSavedCountry().catch(e => {
-            log(`Failed to load cities in constructor: ${e}`);
-        });
+        this.#bindSettingsAndSignals();
 
         this.#updateLocationFields();
         log('Settings UI Initialized.');
@@ -159,11 +155,12 @@ class Settings {
         this.notificationsGroup.add(this.field_azan_notification_mode);
     }
 
-    #bindSettings() {
+    async #bindSettingsAndSignals() {
         const flag = Gio.SettingsBindFlags.DEFAULT;
+
+        // Bind all settings except for the city dropdown
         this.schema.bind('auto-location', this.field_auto_location_toggle, 'active', flag);
         this.schema.bind('country', this.field_country, 'selected', flag);
-        this.schema.bind('city', this.field_city, 'selected', flag);
         this.schema.bind('panel-position', this.field_panel_position, 'selected', flag);
         this.schema.bind('time-format-12', this.field_time_format_12_toggle, 'active', flag);
         this.schema.bind('notify-for-azan', this.field_azan_notification_toggle, 'active', flag);
@@ -175,6 +172,14 @@ class Settings {
         this.schema.bind('concise-list', this.field_which_times_mode, 'selected', flag);
         this.schema.bind('notify-before-azan', this.field_azan_notification_mode, 'selected', flag);
 
+        // Manually load the cities for the selected country
+        await this.loadCitiesForSavedCountry();
+
+        // Now that the city model is populated, bind the city setting.
+        // This will correctly select the saved city.
+        this.schema.bind('city', this.field_city, 'selected', flag);
+
+        // Connect signals for user interactions
         this._signals.push([
             this.field_auto_location_toggle,
             this.field_auto_location_toggle.connect('notify::active', () => this.#updateLocationFields())
