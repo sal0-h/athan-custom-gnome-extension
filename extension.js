@@ -47,6 +47,9 @@ const Azan = GObject.registerClass(
 
             this._updateLabelPeriodic();
             this._updatePrayerVisibility();
+        }
+
+        _initTimeData() {
             this._dateFormatFull = _('%A %B %e, %Y');
 
             this._prayTimes = new PrayTimes.PrayTimes('MWL');
@@ -241,7 +244,6 @@ const Azan = GObject.registerClass(
 
             this.menu.addMenuItem(this.prefs_s);
         }
-        }
 
         _bindSettings() {
             this._settingsChangedIds = [];
@@ -435,32 +437,28 @@ const Azan = GObject.registerClass(
             }
 
             const {
-                nearestPrayerId,
-                diffMinutes,
+                nextPrayer,
+                previousPrayer,
                 isTimeForPraying,
-                isAfterAzan,
             } = this._findNearestPrayer(timesFloat, currentSeconds);
 
-            if (nearestPrayerId !== this._lastNotifiedPrayerId) {
+            if (nextPrayer.id !== this._lastNotifiedPrayerId) {
                 this._azanNotified = false;
                 this._beforeAzanNotified = false;
-                this._lastNotifiedPrayerId = nearestPrayerId;
+                this._lastNotifiedPrayerId = nextPrayer.id;
             }
 
+            this._updatePrayerHighlight(nextPrayer.id, previousPrayer.id);
             this._updateIslamicDate();
             this._handlePrayerNotifications(
-                isAfterAzan,
-                diffMinutes,
-                nearestPrayerId,
+                nextPrayer,
                 timesStr,
                 isTimeForPraying
             );
             this._updateIndicatorText(
                 isTimeForPraying,
-                isAfterAzan,
-                diffMinutes,
-                nearestPrayerId,
-                timesStr
+                nextPrayer,
+                previousPrayer
             );
         }
 
@@ -491,11 +489,7 @@ const Azan = GObject.registerClass(
         }
 
         _findNearestPrayer(timesFloat, currentSeconds) {
-            let nearestUpcomingPrayerId = null;
-            let minDiffMinutes = Number.MAX_VALUE;
-            let afterAzanInfo = null;
-
-            for (const prayerId of this._primaryPrayers) {
+            let prayerTimes = this._primaryPrayers.map(prayerId => {
                 const prayerSeconds = this._calculatePrayerSeconds(
                     timesFloat,
                     prayerId,
@@ -503,57 +497,50 @@ const Azan = GObject.registerClass(
                 );
                 let diffSeconds = prayerSeconds - currentSeconds;
 
-                // ? Handling wrap-around at midnight
                 if (diffSeconds < -12 * 3600) {
                     diffSeconds += 24 * 3600;
                 } else if (diffSeconds > 12 * 3600) {
                     diffSeconds -= 24 * 3600;
                 }
 
-                const diffMinutes = Math.floor(diffSeconds / 60);
+                return {
+                    id: prayerId,
+                    diffMinutes: Math.floor(diffSeconds / 60),
+                };
+            });
 
-                // ? If it’s prayer time
-                if (diffMinutes === 0) {
-                    return {
-                        nearestPrayerId: prayerId,
-                        diffMinutes: 0,
-                        isTimeForPraying: true,
-                        isAfterAzan: false,
-                    };
-                }
+            let nextPrayer = prayerTimes
+                .filter(p => p.diffMinutes > 0)
+                .sort((a, b) => a.diffMinutes - b.diffMinutes)[0];
 
-                // ? If prayer just ended (show "since athan" messages)
-                if (diffMinutes < 0 && diffMinutes >= -15) {
-                    if (
-                        afterAzanInfo === null ||
-                        diffMinutes > afterAzanInfo.diffMinutes
-                    ) {
-                        afterAzanInfo = {
-                            nearestPrayerId: prayerId,
-                            diffMinutes: diffMinutes,
-                            isTimeForPraying: false,
-                            isAfterAzan: true,
-                        };
-                    }
-                }
+            let previousPrayer = prayerTimes
+                .filter(p => p.diffMinutes <= 0)
+                .sort((a, b) => b.diffMinutes - a.diffMinutes)[0];
 
-                // ? Then find the nearest upcoming primary prayer
-                if (diffMinutes > 0 && diffMinutes < minDiffMinutes) {
-                    minDiffMinutes = diffMinutes;
-                    nearestUpcomingPrayerId = prayerId;
-                }
+            if (!nextPrayer) {
+                nextPrayer = prayerTimes.sort((a, b) => a.diffMinutes - b.diffMinutes)[0];
+            }
+            if (!previousPrayer) {
+                previousPrayer = prayerTimes.sort((a, b) => b.diffMinutes - a.diffMinutes)[0];
             }
 
-            if (afterAzanInfo) {
-                return afterAzanInfo;
-            }
+            const isTimeForPraying = previousPrayer && previousPrayer.diffMinutes === 0;
 
-            return {
-                nearestPrayerId: nearestUpcomingPrayerId,
-                diffMinutes: minDiffMinutes,
-                isTimeForPraying: false,
-                isAfterAzan: false,
-            };
+            return { nextPrayer, previousPrayer, isTimeForPraying };
+        }
+
+        _updatePrayerHighlight(nextPrayerId, previousPrayerId) {
+            for (const prayerId in this._prayItems) {
+                const { menuItem } = this._prayItems[prayerId];
+                menuItem.actor.remove_style_class_name('next-prayer');
+                menuItem.actor.remove_style_class_name('previous-prayer');
+
+                if (prayerId === nextPrayerId) {
+                    menuItem.actor.add_style_class_name('next-prayer');
+                } else if (prayerId === previousPrayerId) {
+                    menuItem.actor.add_style_class_name('previous-prayer');
+                }
+            }
         }
 
         _calculatePrayerSeconds(timesFloat, prayerId, currentSeconds) {
@@ -583,28 +570,25 @@ const Azan = GObject.registerClass(
         }
 
         _handlePrayerNotifications(
-            isAfterAzan,
-            diffMinutes,
-            nearestPrayerId,
+            nextPrayer,
             timesStr,
             isTimeForPraying
         ) {
             if (
                 this._opt_notify_before_azan > 0 &&
-                diffMinutes === this._opt_notify_before_azan &&
+                nextPrayer.diffMinutes === this._opt_notify_before_azan &&
                 !this._beforeAzanNotified
             ) {
                 Main.notify(
-                    // ? Arabic plural form
                     ngettext(
                         'One minute remaining until %s prayer.',
                         '%d minutes remaining until %s prayer.',
                         this._opt_notify_before_azan
                     ).format(
                         this._opt_notify_before_azan,
-                        this._timeNames[nearestPrayerId]
+                        this._timeNames[nextPrayer.id]
                     ),
-                    _('Prayer time: %s').format(timesStr[nearestPrayerId])
+                    _('Prayer time: %s').format(timesStr[nextPrayer.id])
                 );
                 this._beforeAzanNotified = true;
             }
@@ -616,9 +600,9 @@ const Azan = GObject.registerClass(
             ) {
                 Main.notify(
                     _('It’s time for %s prayer.').format(
-                        this._timeNames[nearestPrayerId]
+                        this._timeNames[nextPrayer.id]
                     ),
-                    _('Prayer time: %s').format(timesStr[nearestPrayerId])
+                    _('Prayer time: %s').format(timesStr[nextPrayer.id])
                 );
                 this._azanNotified = true;
             }
@@ -626,34 +610,27 @@ const Azan = GObject.registerClass(
 
         _updateIndicatorText(
             isTimeForPraying,
-            isAfterAzan,
-            diffMinutes,
-            nearestPrayerId
+            nextPrayer,
+            previousPrayer
         ) {
             if (isTimeForPraying) {
                 this.indicatorText.set_text(
                     _('It’s time for %s prayer.').format(
-                        this._timeNames[nearestPrayerId]
+                        this._timeNames[previousPrayer.id]
                     )
                 );
                 return;
             }
 
-            if (isAfterAzan) {
-                this.indicatorText.set_text(
-                    pgettext('Extention indecator', '%s +%s').format(
-                        this._timeNames[nearestPrayerId],
-                        this._formatRemainingTimeFromMinutes(diffMinutes)
-                    )
-                );
-                return;
-            }
+            const timeSince = this._formatRemainingTimeFromMinutes(previousPrayer.diffMinutes);
+            const timeUntil = this._formatRemainingTimeFromMinutes(nextPrayer.diffMinutes);
 
-            // ? Default: Show time until the next prayer
             this.indicatorText.set_text(
-                pgettext('Extention indecator', '%s -%s').format(
-                    this._timeNames[nearestPrayerId],
-                    this._formatRemainingTimeFromMinutes(diffMinutes)
+                '%s +%s | %s -%s'.format(
+                    this._timeNames[previousPrayer.id],
+                    timeSince,
+                    this._timeNames[nextPrayer.id],
+                    timeUntil
                 )
             );
         }
