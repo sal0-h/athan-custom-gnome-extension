@@ -1,10 +1,14 @@
+import { cities } from './cities.js';
+
+export { cities };
+
 export const countries = [
     { name: 'Afghanistan', code: 'AF' },
     { name: 'Åland Islands', code: 'AX' },
     { name: 'Albania', code: 'AL' },
     { name: 'Algeria', code: 'DZ' },
     { name: 'American Samoa', code: 'AS' },
-    { name: 'AndorrA', code: 'AD' },
+    { name: 'Andorra', code: 'AD' },
     { name: 'Angola', code: 'AO' },
     { name: 'Anguilla', code: 'AI' },
     { name: 'Antarctica', code: 'AQ' },
@@ -243,5 +247,4 @@ export const countries = [
     { name: 'Zimbabwe', code: 'ZW' },
 ];
 
-import { cities } from './cities.js';
-export { cities };
+

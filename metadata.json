@@ -3,7 +3,8 @@
   "name": "AthanTimes (Salman's Custom)",
   "description": "Athan Prayer Times fork by sal0-h, with custom modifications.",
   "shell-version": [
-    "48"
+    "48",
+    "49"
   ],
   "version": 22,
   "settings-schema": "org.gnome.shell.extensions.athan_custom.sal0-h"

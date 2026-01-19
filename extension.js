@@ -18,6 +18,17 @@ import * as PermissionStore from 'resource:///org/gnome/shell/misc/permissionSto
 import * as PrayTimes from './PrayTimes.js';
 import * as HijriCalendarKuwaiti from './HijriCalendarKuwaiti.js';
 
+// Constants
+const HALF_DAY_SECONDS = 12 * 3600;
+const FULL_DAY_SECONDS = 24 * 3600;
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 3600;
+const MINUTES_PER_HOUR = 60;
+const VALID_LATITUDE_MIN = -90;
+const VALID_LATITUDE_MAX = 90;
+const VALID_LONGITUDE_MIN = -180;
+const VALID_LONGITUDE_MAX = 180;
+
 const Azan = GObject.registerClass(
     class Azan extends PanelMenu.Button {
         _init(extension) {
@@ -37,6 +48,10 @@ const Azan = GObject.registerClass(
             this._panelPositionArr = ['center', 'left', 'right'];
             this._notifyBeforeAzanMinutes = [0, 5, 10, 15]; // ? Mapping to minutes
             this._conciseListLevels = [0, 1]; // ? 0: Primary prayers only, 1: All times
+            
+            // Initialize Geoclue service to null
+            this._gclueService = null;
+            this._gclueStarting = false;
 
             this._bindSettings();
             this._loadSettings();
@@ -119,6 +134,8 @@ const Azan = GObject.registerClass(
         _initServices() {
             this._gclueLocationChangedId = 0;
             this._weatherAuthorized = false;
+            this._gclueService = null;
+            this._gclueStarting = false;
 
             this._permStore = new PermissionStore.PermissionStore(
                 (proxy, error) => {
@@ -134,11 +151,12 @@ const Azan = GObject.registerClass(
                         'gnome',
                         'geolocation',
                         (res, error) => {
-                            if (error)
+                            if (error) {
                                 this.logger.log(
                                     'Error looking up permission: ' +
                                         error.message
                                 );
+                            }
 
                             let [perms, data] = error ? [{}, null] : res;
                             let params = [
@@ -331,16 +349,19 @@ const Azan = GObject.registerClass(
                 (o, res) => {
                     try {
                         this._gclueService = Geoclue.Simple.new_finish(res);
+                        if (this._gclueService && this._gclueService.get_client) {
+                            this._gclueService.get_client().distance_threshold = 100;
+                        }
+                        this._updateLocationMonitoring();
                     } catch (e) {
                         this.logger.log(
                             'Failed to connect to Geoclue2 service: ' +
                                 e.message
                         );
-                        return;
+                        this._gclueService = null;
+                    } finally {
+                        this._gclueStarting = false;
                     }
-                    this._gclueStarted = true;
-                    this._gclueService.get_client().distance_threshold = 100;
-                    this._updateLocationMonitoring();
                 }
             );
         }
@@ -364,11 +385,50 @@ const Azan = GObject.registerClass(
         }
 
         _onGClueLocationChanged() {
-            let geoLocation = this._gclueService.location;
-            this._opt_latitude = geoLocation.latitude;
-            this._opt_longitude = geoLocation.longitude;
-            this._settings.set_double('latitude', this._opt_latitude);
-            this._settings.set_double('longitude', this._opt_longitude);
+            if (!this._gclueService) {
+                this.logger.log('Geoclue service not available');
+                return;
+            }
+
+            try {
+                const geoLocation = this._gclueService.location;
+                if (!geoLocation) {
+                    this.logger.log('Geoclue location not available');
+                    return;
+                }
+
+                const latitude = geoLocation.latitude;
+                const longitude = geoLocation.longitude;
+
+                // Validate coordinates
+                if (this._isValidCoordinate(latitude, longitude)) {
+                    this._opt_latitude = latitude;
+                    this._opt_longitude = longitude;
+                    this._settings.set_double('latitude', this._opt_latitude);
+                    this._settings.set_double('longitude', this._opt_longitude);
+                } else {
+                    this.logger.log(
+                        `Invalid coordinates received: lat=${latitude}, lon=${longitude}`
+                    );
+                }
+            } catch (e) {
+                this.logger.log('Error accessing Geoclue location: ' + e.message);
+            }
+        }
+
+        _isValidCoordinate(lat, lon) {
+            return (
+                typeof lat === 'number' &&
+                typeof lon === 'number' &&
+                !isNaN(lat) &&
+                !isNaN(lon) &&
+                isFinite(lat) &&
+                isFinite(lon) &&
+                lat >= VALID_LATITUDE_MIN &&
+                lat <= VALID_LATITUDE_MAX &&
+                lon >= VALID_LONGITUDE_MIN &&
+                lon <= VALID_LONGITUDE_MAX
+            );
         }
 
         _updateLocationMonitoring() {
@@ -379,14 +439,28 @@ const Azan = GObject.registerClass(
                 )
                     return;
 
-                this._gclueLocationChangedId = this._gclueService.connect(
-                    'notify::location',
-                    this._onGClueLocationChanged.bind(this)
-                );
-                this._onGClueLocationChanged();
+                try {
+                    this._gclueLocationChangedId = this._gclueService.connect(
+                        'notify::location',
+                        this._onGClueLocationChanged.bind(this)
+                    );
+                    this._onGClueLocationChanged();
+                } catch (e) {
+                    this.logger.log(
+                        'Error connecting to location monitoring: ' + e.message
+                    );
+                    this._gclueLocationChangedId = 0;
+                }
             } else {
-                if (this._gclueLocationChangedId)
-                    this._gclueService.disconnect(this._gclueLocationChangedId);
+                if (this._gclueLocationChangedId && this._gclueService) {
+                    try {
+                        this._gclueService.disconnect(this._gclueLocationChangedId);
+                    } catch (e) {
+                        this.logger.log(
+                            'Error disconnecting location monitoring: ' + e.message
+                        );
+                    }
+                }
                 this._gclueLocationChangedId = 0;
             }
         }
@@ -426,88 +500,149 @@ const Azan = GObject.registerClass(
         }
 
         _updateLabel() {
-            const currentDate = new Date();
-            const currentSeconds = this._calculateSecondsFromDate(currentDate);
+            try {
+                // Validate coordinates before calculating prayer times
+                if (!this._isValidCoordinate(this._opt_latitude, this._opt_longitude)) {
+                    this.logger.log(
+                        `Invalid coordinates: lat=${this._opt_latitude}, lon=${this._opt_longitude}`
+                    );
+                    this.indicatorText.set_text(_('Invalid location'));
+                    return;
+                }
 
-            const timesStr = this._getPrayerTimes(currentDate, 'String');
-            const timesFloat = this._getPrayerTimes(currentDate, 'Float');
+                const currentDate = new Date();
+                const currentSeconds = this._calculateSecondsFromDate(currentDate);
 
-            for (const prayerId in this._timeNames) {
-                this._prayItems[prayerId].label.text = timesStr[prayerId];
+                const timesStr = this._getPrayerTimes(currentDate, 'String');
+                const timesFloat = this._getPrayerTimes(currentDate, 'Float');
+
+                // Validate prayer times were calculated successfully
+                if (!timesStr || !timesFloat) {
+                    this.logger.log('Failed to calculate prayer times');
+                    this.indicatorText.set_text(_('Error calculating times'));
+                    return;
+                }
+
+                for (const prayerId in this._timeNames) {
+                    if (this._prayItems[prayerId] && this._prayItems[prayerId].label) {
+                        this._prayItems[prayerId].label.text = timesStr[prayerId] || '-----';
+                    }
+                }
+
+                const {
+                    nextPrayer,
+                    previousPrayer,
+                    isTimeForPraying,
+                } = this._findNearestPrayer(timesFloat, currentSeconds);
+
+                if (!nextPrayer || !previousPrayer) {
+                    this.logger.log('Failed to find nearest prayers');
+                    return;
+                }
+
+                if (nextPrayer.id !== this._lastNotifiedPrayerId) {
+                    this._azanNotified = false;
+                    this._beforeAzanNotified = false;
+                    this._lastNotifiedPrayerId = nextPrayer.id;
+                }
+
+                this._updatePrayerHighlight(nextPrayer.id, previousPrayer.id);
+                this._updateIslamicDate();
+                this._handlePrayerNotifications(
+                    nextPrayer,
+                    previousPrayer,
+                    timesStr,
+                    isTimeForPraying
+                );
+                this._updateIndicatorText(
+                    isTimeForPraying,
+                    nextPrayer,
+                    previousPrayer
+                );
+            } catch (e) {
+                this.logger.log('Error updating label: ' + e.message);
+                this.indicatorText.set_text(_('Error'));
             }
-
-            const {
-                nextPrayer,
-                previousPrayer,
-                isTimeForPraying,
-            } = this._findNearestPrayer(timesFloat, currentSeconds);
-
-            if (nextPrayer.id !== this._lastNotifiedPrayerId) {
-                this._azanNotified = false;
-                this._beforeAzanNotified = false;
-                this._lastNotifiedPrayerId = nextPrayer.id;
-            }
-
-            this._updatePrayerHighlight(nextPrayer.id, previousPrayer.id);
-            this._updateIslamicDate();
-            this._handlePrayerNotifications(
-                nextPrayer,
-                timesStr,
-                isTimeForPraying
-            );
-            this._updateIndicatorText(
-                isTimeForPraying,
-                nextPrayer,
-                previousPrayer
-            );
         }
 
         _getPrayerTimes(currentDate, format) {
-            const myLocation = [this._opt_latitude, this._opt_longitude];
-            const myTimezone = this._timezoneArr[this._opt_timezone];
+            try {
+                // Validate calculation method index
+                const calcMethodIndex = this._opt_calculation_method || 0;
+                if (calcMethodIndex < 0 || calcMethodIndex >= this._calcMethodsArr.length) {
+                    this.logger.log(`Invalid calculation method index: ${calcMethodIndex}`);
+                    return null;
+                }
 
-            this._prayTimes.setMethod(
-                this._calcMethodsArr[this._opt_calculation_method]
-            );
-            this._prayTimes.adjust({ asr: 'Standard' });
+                // Validate timezone index
+                const timezoneIndex = this._opt_timezone || 0;
+                if (timezoneIndex < 0 || timezoneIndex >= this._timezoneArr.length) {
+                    this.logger.log(`Invalid timezone index: ${timezoneIndex}`);
+                    return null;
+                }
 
-            return this._opt_time_format_12
-                ? this._prayTimes.getTimes(
-                      currentDate,
-                      myLocation,
-                      myTimezone,
-                      'auto',
-                      format === 'String' ? '12h' : 'Float'
-                  )
-                : this._prayTimes.getTimes(
-                      currentDate,
-                      myLocation,
-                      myTimezone,
-                      'auto',
-                      format === 'String' ? '24h' : 'Float'
-                  );
+                const myLocation = [this._opt_latitude, this._opt_longitude];
+                const myTimezone = this._timezoneArr[timezoneIndex];
+
+                this._prayTimes.setMethod(
+                    this._calcMethodsArr[calcMethodIndex]
+                );
+                this._prayTimes.adjust({ asr: 'Standard' });
+
+                return this._opt_time_format_12
+                    ? this._prayTimes.getTimes(
+                          currentDate,
+                          myLocation,
+                          myTimezone,
+                          'auto',
+                          format === 'String' ? '12h' : 'Float'
+                      )
+                    : this._prayTimes.getTimes(
+                          currentDate,
+                          myLocation,
+                          myTimezone,
+                          'auto',
+                          format === 'String' ? '24h' : 'Float'
+                      );
+            } catch (e) {
+                this.logger.log('Error getting prayer times: ' + e.message);
+                return null;
+            }
         }
 
         _findNearestPrayer(timesFloat, currentSeconds) {
+            if (!timesFloat || typeof currentSeconds !== 'number' || isNaN(currentSeconds)) {
+                return { nextPrayer: null, previousPrayer: null, isTimeForPraying: false };
+            }
+
             let prayerTimes = this._primaryPrayers.map(prayerId => {
                 const prayerSeconds = this._calculatePrayerSeconds(
                     timesFloat,
-                    prayerId,
-                    currentSeconds
+                    prayerId
                 );
+                
+                if (typeof prayerSeconds !== 'number' || isNaN(prayerSeconds)) {
+                    return null;
+                }
+
                 let diffSeconds = prayerSeconds - currentSeconds;
 
-                if (diffSeconds < -12 * 3600) {
-                    diffSeconds += 24 * 3600;
-                } else if (diffSeconds > 12 * 3600) {
-                    diffSeconds -= 24 * 3600;
+                // Handle wraparound at midnight
+                if (diffSeconds < -HALF_DAY_SECONDS) {
+                    diffSeconds += FULL_DAY_SECONDS;
+                } else if (diffSeconds > HALF_DAY_SECONDS) {
+                    diffSeconds -= FULL_DAY_SECONDS;
                 }
 
                 return {
                     id: prayerId,
-                    diffMinutes: Math.floor(diffSeconds / 60),
+                    diffMinutes: Math.floor(diffSeconds / SECONDS_PER_MINUTE),
                 };
-            });
+            }).filter(p => p !== null);
+
+            if (prayerTimes.length === 0) {
+                return { nextPrayer: null, previousPrayer: null, isTimeForPraying: false };
+            }
 
             let nextPrayer = prayerTimes
                 .filter(p => p.diffMinutes > 0)
@@ -530,8 +665,17 @@ const Azan = GObject.registerClass(
         }
 
         _updatePrayerHighlight(nextPrayerId, previousPrayerId) {
+            if (!nextPrayerId && !previousPrayerId) {
+                return;
+            }
+
             for (const prayerId in this._prayItems) {
-                const { menuItem } = this._prayItems[prayerId];
+                const prayItem = this._prayItems[prayerId];
+                if (!prayItem || !prayItem.menuItem || !prayItem.menuItem.actor) {
+                    continue;
+                }
+
+                const { menuItem } = prayItem;
                 menuItem.actor.remove_style_class_name('next-prayer');
                 menuItem.actor.remove_style_class_name('previous-prayer');
 
@@ -543,34 +687,33 @@ const Azan = GObject.registerClass(
             }
         }
 
-        _calculatePrayerSeconds(timesFloat, prayerId, currentSeconds) {
-            let prayerSeconds = this._calculateSecondsFromHour(
-                timesFloat[prayerId]
-            );
-            const ishaSeconds = this._calculateSecondsFromHour(
-                timesFloat['isha']
-            );
-            const fajrSeconds = this._calculateSecondsFromHour(
-                timesFloat['fajr']
-            );
-
-            if (prayerId === 'fajr' && currentSeconds > ishaSeconds) {
-                prayerSeconds = fajrSeconds + 24 * 60 * 60;
-            }
-
-            return prayerSeconds;
+        _calculatePrayerSeconds(timesFloat, prayerId) {
+            return this._calculateSecondsFromHour(timesFloat[prayerId]);
         }
 
         _updateIslamicDate() {
-            const hijriDate = HijriCalendarKuwaiti.KuwaitiCalendar(
-                this._opt_hijri_date_adjustment
-            );
-            const outputIslamicDate = this._formatHijriDate(hijriDate);
-            this._dateMenuItem.label.text = outputIslamicDate;
+            try {
+                const hijriDate = HijriCalendarKuwaiti.KuwaitiCalendar(
+                    this._opt_hijri_date_adjustment || 0
+                );
+                
+                if (!hijriDate || !Array.isArray(hijriDate) || hijriDate.length < 8) {
+                    this.logger.log('Invalid Hijri date returned');
+                    return;
+                }
+
+                const outputIslamicDate = this._formatHijriDate(hijriDate);
+                if (this._dateMenuItem && this._dateMenuItem.label) {
+                    this._dateMenuItem.label.text = outputIslamicDate;
+                }
+            } catch (e) {
+                this.logger.log('Error updating Islamic date: ' + e.message);
+            }
         }
 
         _handlePrayerNotifications(
             nextPrayer,
+            previousPrayer,
             timesStr,
             isTimeForPraying
         ) {
@@ -599,10 +742,10 @@ const Azan = GObject.registerClass(
                 this._opt_notify_for_azan
             ) {
                 Main.notify(
-                    _('It’s time for %s prayer.').format(
-                        this._timeNames[nextPrayer.id]
+                    _("It's time for %s prayer.").format(
+                        this._timeNames[previousPrayer.id]
                     ),
-                    _('Prayer time: %s').format(timesStr[nextPrayer.id])
+                    _('Prayer time: %s').format(timesStr[previousPrayer.id])
                 );
                 this._azanNotified = true;
             }
@@ -636,20 +779,30 @@ const Azan = GObject.registerClass(
         }
 
         _calculateSecondsFromDate(date) {
+            if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
+                return 0;
+            }
             return (
-                date.getHours() * 3600 +
-                date.getMinutes() * 60 +
+                date.getHours() * SECONDS_PER_HOUR +
+                date.getMinutes() * SECONDS_PER_MINUTE +
                 date.getSeconds()
             );
         }
 
         _calculateSecondsFromHour(hour) {
-            return hour * 3600;
+            if (typeof hour !== 'number' || isNaN(hour) || !isFinite(hour)) {
+                return 0;
+            }
+            return hour * SECONDS_PER_HOUR;
         }
 
         _formatRemainingTimeFromMinutes(diffMinutes) {
-            let hours = Math.floor(Math.abs(diffMinutes) / 60);
-            let minutes = Math.abs(diffMinutes) % 60;
+            if (typeof diffMinutes !== 'number' || isNaN(diffMinutes)) {
+                return '00:00';
+            }
+            const absMinutes = Math.abs(diffMinutes);
+            let hours = Math.floor(absMinutes / MINUTES_PER_HOUR);
+            let minutes = absMinutes % MINUTES_PER_HOUR;
 
             return '%s:%s'.format(
                 hours.toString().padStart(2, '0'),
@@ -658,31 +811,70 @@ const Azan = GObject.registerClass(
         }
 
         _formatHijriDate(hijriDate) {
+            if (!hijriDate || !Array.isArray(hijriDate) || hijriDate.length < 8) {
+                return _('Invalid date');
+            }
+
+            const dayIndex = hijriDate[4];
+            const monthIndex = hijriDate[6];
+            
+            if (dayIndex < 0 || dayIndex >= this._dayNames.length ||
+                monthIndex < 0 || monthIndex >= this._monthNames.length) {
+                this.logger.log(`Invalid Hijri date indices: day=${dayIndex}, month=${monthIndex}`);
+                return _('Invalid date');
+            }
+
             return pgettext('format Hijri Date', '%s, %s %s %s').format(
-                this._dayNames[hijriDate[4]],
+                this._dayNames[dayIndex],
                 hijriDate[5],
-                this._monthNames[hijriDate[6]],
+                this._monthNames[monthIndex],
                 hijriDate[7]
             );
         }
 
         stop() {
-            this._settingsChangedIds.forEach((id) => {
-                this._settings.disconnect(id);
-            });
-            this._settingsChangedIds = [];
+            // Disconnect settings signals
+            if (this._settingsChangedIds) {
+                this._settingsChangedIds.forEach((id) => {
+                    try {
+                        this._settings.disconnect(id);
+                    } catch (e) {
+                        this.logger.log('Error disconnecting setting: ' + e.message);
+                    }
+                });
+                this._settingsChangedIds = [];
+            }
 
+            // Remove periodic timeout
             if (this._periodicTimeoutId) {
-                GLib.source_remove(this._periodicTimeoutId);
+                try {
+                    GLib.source_remove(this._periodicTimeoutId);
+                } catch (e) {
+                    this.logger.log('Error removing timeout: ' + e.message);
+                }
                 this._periodicTimeoutId = null;
             }
 
-            if (this._gclueLocationChangedId) {
-                this._gclueService.disconnect(this._gclueLocationChangedId);
+            // Disconnect Geoclue location monitoring
+            if (this._gclueLocationChangedId && this._gclueService) {
+                try {
+                    this._gclueService.disconnect(this._gclueLocationChangedId);
+                } catch (e) {
+                    this.logger.log('Error disconnecting Geoclue: ' + e.message);
+                }
                 this._gclueLocationChangedId = 0;
             }
 
-            this.menu.removeAll();
+            // Clean up Geoclue service
+            this._gclueService = null;
+            this._gclueStarting = false;
+
+            // Remove menu items
+            try {
+                this.menu.removeAll();
+            } catch (e) {
+                this.logger.log('Error removing menu items: ' + e.message);
+            }
         }
     }
 );

@@ -28,6 +28,7 @@ export default class AthanPreferences extends ExtensionPreferences {
 
         window.connect('close-request', () => {
             settingsUI.disconnectSignals();
+            settingsUI.cleanup();
         });
     }
 }
@@ -37,7 +38,7 @@ class Settings {
         this.schema = schema;
         this._cityData = [];
         this._signals = [];
-        this._httpSession = new Soup.Session();
+        this._httpSession = null; // Will be created if needed, but not used currently
 
         this.#initializeSettingsUI();
     }
@@ -55,10 +56,32 @@ class Settings {
 
     disconnectSignals() {
         log('Disconnecting signals...');
-        for (const [widget, signal] of this._signals) {
-            widget.disconnect(signal);
+        if (this._signals) {
+            for (const [widget, signal] of this._signals) {
+                try {
+                    if (widget && signal) {
+                        widget.disconnect(signal);
+                    }
+                } catch (e) {
+                    log(`Error disconnecting signal: ${e.message}`);
+                }
+            }
+            this._signals = [];
         }
-        this._signals = [];
+    }
+
+    cleanup() {
+        // Clean up HTTP session if it was created
+        if (this._httpSession) {
+            try {
+                // Soup.Session doesn't have explicit cleanup, but we can null it
+                this._httpSession = null;
+            } catch (e) {
+                log(`Error cleaning up HTTP session: ${e.message}`);
+            }
+        }
+        // Clear city data
+        this._cityData = [];
     }
 
     #initFields() {
@@ -180,23 +203,35 @@ class Settings {
         this.schema.bind('city', this.field_city, 'selected', flag);
 
         // Connect signals for user interactions
-        this._signals.push([
-            this.field_auto_location_toggle,
-            this.field_auto_location_toggle.connect('notify::active', () => this.#updateLocationFields())
-        ]);
-        this._signals.push([
-            this.field_country,
-            this.field_country.connect('notify::selected', () => {
-                this.schema.set_int('city', 0);
-                this.loadCitiesForSavedCountry().catch(e => {
-                    log(`Failed to load cities on country change: ${e}`);
-                });
-            })
-        ]);
-        this._signals.push([
-            this.field_city,
-            this.field_city.connect('notify::selected', () => this.#updateCoordinates())
-        ]);
+        try {
+            this._signals.push([
+                this.field_auto_location_toggle,
+                this.field_auto_location_toggle.connect('notify::active', () => this.#updateLocationFields())
+            ]);
+            this._signals.push([
+                this.field_country,
+                this.field_country.connect('notify::selected', async () => {
+                    try {
+                        this.schema.set_int('city', 0);
+                        await this.loadCitiesForSavedCountry();
+                    } catch (e) {
+                        log(`Failed to load cities on country change: ${e.message || e}`);
+                    }
+                })
+            ]);
+            this._signals.push([
+                this.field_city,
+                this.field_city.connect('notify::selected', () => {
+                    try {
+                        this.#updateCoordinates();
+                    } catch (e) {
+                        log(`Error updating coordinates: ${e.message || e}`);
+                    }
+                })
+            ]);
+        } catch (e) {
+            log(`Error connecting signals: ${e.message || e}`);
+        }
     }
 
     #populateCountries() {
@@ -222,13 +257,33 @@ class Settings {
             list.remove(0);
             list.append(_('Select Country First'));
             this.field_city.model = list;
+            this._cityData = [];
+            return;
+        }
+
+        // Validate country index
+        if (!Locations.countries || selectedCountryIndex - 1 >= Locations.countries.length) {
+            log(`Invalid country index: ${selectedCountryIndex}`);
+            list.remove(0);
+            list.append(_('Invalid country selection'));
+            this.field_city.model = list;
+            this._cityData = [];
             return;
         }
 
         const country = Locations.countries[selectedCountryIndex - 1];
+        if (!country || !country.code) {
+            log('Invalid country data');
+            list.remove(0);
+            list.append(_('Invalid country data'));
+            this.field_city.model = list;
+            this._cityData = [];
+            return;
+        }
+
         log(`Fetching cities for country: ${country.code}`);
 
-        const cities = Locations.cities[country.code] || [];
+        const cities = (Locations.cities && Locations.cities[country.code]) || [];
         this._cityData = cities;
         log(`Found ${cities.length} cities.`);
 
@@ -236,7 +291,9 @@ class Settings {
         list.append(_('Select City'));
         if (cities.length > 0) {
             for (const city of cities) {
-                list.append(city.name);
+                if (city && city.name) {
+                    list.append(city.name);
+                }
             }
             this.field_city.sensitive = true;
         } else {
@@ -247,7 +304,8 @@ class Settings {
 
         const savedCityIndex = this.schema.get_int('city');
         log(`Restoring saved city index: ${savedCityIndex}`);
-        if (savedCityIndex > 0 && savedCityIndex < list.get_n_items()) {
+        const maxItems = list.get_n_items();
+        if (savedCityIndex > 0 && savedCityIndex < maxItems) {
             this.field_city.selected = savedCityIndex;
         } else {
             this.field_city.selected = 0;
@@ -260,10 +318,26 @@ class Settings {
             return;
         }
 
+        // Validate array bounds
+        if (selectedCityIndex - 1 >= this._cityData.length) {
+            log(`Invalid city index: ${selectedCityIndex} (max: ${this._cityData.length})`);
+            return;
+        }
+
         const city = this._cityData[selectedCityIndex - 1];
-        if (city) {
-            this.schema.set_double('latitude', city.lat);
-            this.schema.set_double('longitude', city.lon);
+        if (city && typeof city.lat === 'number' && typeof city.lon === 'number' &&
+            !isNaN(city.lat) && !isNaN(city.lon) &&
+            isFinite(city.lat) && isFinite(city.lon)) {
+            // Validate coordinate ranges
+            if (city.lat >= -90 && city.lat <= 90 &&
+                city.lon >= -180 && city.lon <= 180) {
+                this.schema.set_double('latitude', city.lat);
+                this.schema.set_double('longitude', city.lon);
+            } else {
+                log(`Invalid coordinates: lat=${city.lat}, lon=${city.lon}`);
+            }
+        } else {
+            log(`Invalid city data at index ${selectedCityIndex - 1}`);
         }
     }
 
