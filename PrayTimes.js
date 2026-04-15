@@ -1,4 +1,4 @@
-// ? Dummy function nessesary for translation with xgettext tool.
+// Dummy function necessary for translation with xgettext tool.
 function _(str) {
     return str;
 }
@@ -23,7 +23,7 @@ export function getMethods() {
         },
         Qatar: {
             name: _('Qatar'),
-            params: { fajr: 18.5, isha: '90 min' },
+            params: { fajr: 18, isha: 17 },
         },
     };
 }
@@ -186,7 +186,6 @@ export function PrayTimes(method) {
                 q + 1.915 * DMath.sin(g) + 0.02 * DMath.sin(2 * g)
             );
 
-            // const R = 1.00014 - 0.01671 * DMath.cos(g) - 0.00014 * DMath.cos(2 * g);
             const e = 23.439 - 0.00000036 * D;
 
             const RA =
@@ -398,7 +397,7 @@ export function PrayTimes(method) {
                 0,
                 0
             );
-            const GMTString = localDate.toGMTString();
+            const GMTString = localDate.toUTCString();
             const GMTDate = new Date(
                 GMTString.substring(0, GMTString.lastIndexOf(' ') - 1)
             );

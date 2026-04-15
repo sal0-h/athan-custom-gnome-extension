@@ -1,7 +1,6 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
-import Soup from 'gi://Soup';
 
 import {
     ExtensionPreferences,
@@ -38,7 +37,6 @@ class Settings {
         this.schema = schema;
         this._cityData = [];
         this._signals = [];
-        this._httpSession = null; // Will be created if needed, but not used currently
 
         this.#initializeSettingsUI();
     }
@@ -71,16 +69,6 @@ class Settings {
     }
 
     cleanup() {
-        // Clean up HTTP session if it was created
-        if (this._httpSession) {
-            try {
-                // Soup.Session doesn't have explicit cleanup, but we can null it
-                this._httpSession = null;
-            } catch (e) {
-                log(`Error cleaning up HTTP session: ${e.message}`);
-            }
-        }
-        // Clear city data
         this._cityData = [];
     }
 

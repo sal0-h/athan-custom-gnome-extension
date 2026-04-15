@@ -18,7 +18,11 @@ export const cities = {
         {"name": "Al Ghuwariyah", "lat": 25.8448, "lon": 51.2454},
         {"name": "Al Hilal al Gharbiyah", "lat": 25.2603, "lon": 51.5189},
         {"name": "Al Ruwais", "lat": 26.1301, "lon": 51.1978},
-        {"name": "Abu Dhalouf", "lat": 26.1236, "lon": 51.1667}
+        {"name": "Abu Dhalouf", "lat": 26.1236, "lon": 51.1667},
+        {"name": "Al Daayen", "lat": 25.4833, "lon": 51.5000},
+        {"name": "Al Shahaniya", "lat": 25.4156, "lon": 51.2326},
+        {"name": "The Pearl-Qatar", "lat": 25.3701, "lon": 51.5463},
+        {"name": "Education City", "lat": 25.3167, "lon": 51.4333}
     ],
     "AZ": [
         {"name": "Baku", "lat": 40.409264, "lon": 49.867092},

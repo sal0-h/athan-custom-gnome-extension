@@ -46,15 +46,15 @@ const Azan = GObject.registerClass(
                 'org.gnome.shell.extensions.athan_custom.sal0-h'
             );
             this._panelPositionArr = ['center', 'left', 'right'];
-            this._notifyBeforeAzanMinutes = [0, 5, 10, 15]; // ? Mapping to minutes
-            this._conciseListLevels = [0, 1]; // ? 0: Primary prayers only, 1: All times
+            this._notifyBeforeAzanMinutes = [0, 5, 10, 15]; // Mapping to minutes
+            this._conciseListLevels = [0, 1]; // 0: Primary prayers only, 1: All times
             
-            // Initialize Geoclue service to null
             this._gclueService = null;
             this._gclueStarting = false;
 
             this._bindSettings();
             this._loadSettings();
+            this._updateAutoLocation();
 
             this._initTimeData();
             this._initUI();
@@ -93,12 +93,10 @@ const Azan = GObject.registerClass(
                 _('Thu Al-Hijjah'),
             ];
 
-            let today = new Date();
-            let dayOfWeek = today.getDay();
             this._timeNames = {
                 fajr: _('Al-Fajr'),
                 sunrise: _('Al-Shurooq'),
-                dhuhr: dayOfWeek === 5 ? _('Jummah') : _('Al-Thuhr'),
+                dhuhr: _('Al-Thuhr'),
                 asr: _('Al-Asr'),
                 maghrib: _('Al-Maghrib'),
                 isha: _("Al-Isha'"),
@@ -133,10 +131,6 @@ const Azan = GObject.registerClass(
 
         _initServices() {
             this._gclueLocationChangedId = 0;
-            this._weatherAuthorized = false;
-            this._gclueService = null;
-            this._gclueStarting = false;
-
             this._permStore = new PermissionStore.PermissionStore(
                 (proxy, error) => {
                     if (error) {
@@ -204,7 +198,7 @@ const Azan = GObject.registerClass(
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-            for (let prayerId in this._timeNames) {
+            for (const prayerId in this._timeNames) {
                 let prayerName = this._timeNames[prayerId];
 
                 let prayMenuItem = new PopupMenu.PopupMenuItem(_(prayerName), {
@@ -236,14 +230,14 @@ const Azan = GObject.registerClass(
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-            this.prefs_s = new PopupMenu.PopupBaseMenuItem({
+            this._prefsMenuItem = new PopupMenu.PopupBaseMenuItem({
                 reactive: false,
                 can_focus: false,
             });
             let l = new St.Label({ text: ' ' });
             l.x_expand = true;
-            this.prefs_s.actor.add_child(l);
-            this.prefs_b = new St.Button({
+            this._prefsMenuItem.actor.add_child(l);
+            this._prefsButton = new St.Button({
                 child: new St.Icon({
                     icon_name: 'preferences-system-symbolic',
                     icon_size: 30,
@@ -251,16 +245,16 @@ const Azan = GObject.registerClass(
                 style_class: 'prefs_s_action',
             });
 
-            this.prefs_b.connect('clicked', () => {
+            this._prefsButton.connect('clicked', () => {
                 this.extension.openPreferences();
             });
 
-            this.prefs_s.actor.add_child(this.prefs_b);
+            this._prefsMenuItem.actor.add_child(this._prefsButton);
             l = new St.Label({ text: ' ' });
             l.x_expand = true;
-            this.prefs_s.actor.add_child(l);
+            this._prefsMenuItem.actor.add_child(l);
 
-            this.menu.addMenuItem(this.prefs_s);
+            this.menu.addMenuItem(this._prefsMenuItem);
         }
 
         _bindSettings() {
@@ -269,7 +263,7 @@ const Azan = GObject.registerClass(
             const connectSetting = (key, handler) => {
                 const id = this._settings.connect(
                     `changed::${key}`,
-                    (settings) => {
+                    () => {
                         this._loadSettings();
                         handler();
                     }
@@ -314,8 +308,6 @@ const Azan = GObject.registerClass(
                 'notify-for-azan': 'boolean',
                 'notify-before-azan': 'int',
                 'panel-position': 'int',
-                country: 'string',
-                city: 'string',
             };
 
             for (const key in settingsKeys) {
@@ -333,8 +325,6 @@ const Azan = GObject.registerClass(
 
             this._panelPosition =
                 this._panelPositionArr[this._opt_panel_position];
-
-            this._updateAutoLocation();
         }
 
         _startGClueService() {
@@ -379,7 +369,6 @@ const Azan = GObject.registerClass(
 
             let permission = perms['org.gnome.Weather.Application'] || ['NONE'];
             let [accuracy] = permission;
-            this._weatherAuthorized = accuracy != 'NONE';
 
             this._updateAutoLocation();
         }
@@ -474,7 +463,7 @@ const Azan = GObject.registerClass(
         }
 
         _updatePrayerVisibility() {
-            for (let prayerId in this._timeNames) {
+            for (const prayerId in this._timeNames) {
                 this._prayItems[prayerId].menuItem.actor.visible =
                     this._isVisiblePrayer(prayerId);
             }
@@ -513,6 +502,10 @@ const Azan = GObject.registerClass(
                 const currentDate = new Date();
                 const currentSeconds = this._calculateSecondsFromDate(currentDate);
 
+                // Dynamically update Dhuhr label for Jummah on Fridays
+                this._timeNames.dhuhr = currentDate.getDay() === 5
+                    ? _('Jummah') : _('Al-Thuhr');
+
                 const timesStr = this._getPrayerTimes(currentDate, 'String');
                 const timesFloat = this._getPrayerTimes(currentDate, 'Float');
 
@@ -526,6 +519,10 @@ const Azan = GObject.registerClass(
                 for (const prayerId in this._timeNames) {
                     if (this._prayItems[prayerId] && this._prayItems[prayerId].label) {
                         this._prayItems[prayerId].label.text = timesStr[prayerId] || '-----';
+                    }
+                    // Update prayer name labels (for dynamic Jummah/Dhuhr)
+                    if (this._prayItems[prayerId] && this._prayItems[prayerId].menuItem) {
+                        this._prayItems[prayerId].menuItem.label.text = this._timeNames[prayerId];
                     }
                 }
 
@@ -724,7 +721,7 @@ const Azan = GObject.registerClass(
             ) {
                 Main.notify(
                     ngettext(
-                        'One minute remaining until %s prayer.',
+                        '%d minute remaining until %s prayer.',
                         '%d minutes remaining until %s prayer.',
                         this._opt_notify_before_azan
                     ).format(
@@ -758,7 +755,7 @@ const Azan = GObject.registerClass(
         ) {
             if (isTimeForPraying) {
                 this.indicatorText.set_text(
-                    _('It’s time for %s prayer.').format(
+                    _("It's time for %s prayer.").format(
                         this._timeNames[previousPrayer.id]
                     )
                 );
