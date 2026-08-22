@@ -115,13 +115,21 @@ const Azan = GObject.registerClass(
                 midnight: 1,
             };
 
-            this._calcMethodsArr = ['MWL', 'Makkah', 'Egypt', 'Karachi', 'Qatar'];
+            this._calcMethodsArr = [
+                'MWL',
+                'Makkah',
+                'Egypt',
+                'Karachi',
+                'Qatar',
+                'ISNA',
+            ];
             this._calcMethodNames = [
                 _('Muslim World League'),
                 _('Umm Al-Qura University, Makkah'),
                 _('Egyptian General Authority of Survey, Egypt'),
                 _('University of Islamic Sciences, Karachi'),
                 _('Qatar'),
+                _('Islamic Society of North America (ISNA)'),
             ];
             this._timezoneArr = Array.from({ length: 27 }, (_, index) =>
                 (index - 12).toString()
@@ -580,6 +588,7 @@ const Azan = GObject.registerClass(
 
                 const myLocation = [this._opt_latitude, this._opt_longitude];
                 const myTimezone = this._timezoneArr[timezoneIndex];
+                const dst = myTimezone === 'auto' ? 'auto' : 0;
 
                 this._prayTimes.setMethod(
                     this._calcMethodsArr[calcMethodIndex]
@@ -591,14 +600,14 @@ const Azan = GObject.registerClass(
                           currentDate,
                           myLocation,
                           myTimezone,
-                          'auto',
+                          dst,
                           format === 'String' ? '12h' : 'Float'
                       )
                     : this._prayTimes.getTimes(
                           currentDate,
                           myLocation,
                           myTimezone,
-                          'auto',
+                          dst,
                           format === 'String' ? '24h' : 'Float'
                       );
             } catch (e) {

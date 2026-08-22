@@ -23,7 +23,11 @@ export function getMethods() {
         },
         Qatar: {
             name: _('Qatar'),
-            params: { fajr: 18, isha: 17 },
+            params: { fajr: 18, isha: '90 min' },
+        },
+        ISNA: {
+            name: _('Islamic Society of North America (ISNA)'),
+            params: { fajr: 15, isha: 15 },
         },
     };
 }
@@ -135,7 +139,8 @@ export function PrayTimes(method) {
             if (isNaN(time)) return invalidTime;
             suffixes = suffixes || timeSuffixes;
 
-            time = DMath.fixHour(time);
+            // Round to the nearest minute, matching published prayer timetables.
+            time = DMath.fixHour(time + 0.5 / 60);
             const hours = Math.floor(time);
             const minutes = Math.floor((time - hours) * 60);
             const suffix = format == '12h' ? suffixes[hours < 12 ? 0 : 1] : '';

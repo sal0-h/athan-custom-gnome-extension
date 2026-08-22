@@ -696,7 +696,8 @@ export const cities = {
         {"name": "London", "lat": 51.5074, "lon": -0.1278}
     ],
     "US": [
-        {"name": "Washington, D.C.", "lat": 38.9072, "lon": -77.0369}
+        {"name": "Washington, D.C.", "lat": 38.9072, "lon": -77.0369},
+        {"name": "Pittsburgh", "lat": 40.4488, "lon": -79.9558}
     ],
     "UM": [
         {"name": "Washington, D.C.", "lat": 38.9072, "lon": -77.0369}
